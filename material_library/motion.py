@@ -73,6 +73,24 @@ def _regions(mask: np.ndarray) -> list[tuple[int, int]]:
     return regions
 
 
+def _hysteresis_regions(
+    values: np.ndarray, start_threshold: float, stop_threshold: float
+) -> list[tuple[int, int]]:
+    """Keep a motion region alive through quieter parts of one gesture."""
+    regions: list[tuple[int, int]] = []
+    start: int | None = None
+    for index, value in enumerate(values):
+        if start is None:
+            if value >= start_threshold:
+                start = index
+        elif value < stop_threshold:
+            regions.append((start, index))
+            start = None
+    if start is not None:
+        regions.append((start, len(values)))
+    return regions
+
+
 def find_candidates(
     signal: MotionSignal,
     *,
@@ -84,6 +102,8 @@ def find_candidates(
     sample_fps: int = 8,
     max_candidates: int = 3,
     exact_action: bool = False,
+    action_min_duration: float = 1.0,
+    action_context: float = 0.2,
 ) -> list[Candidate]:
     """Return up to ``max_candidates`` non-overlapping best windows.
 
@@ -99,15 +119,35 @@ def find_candidates(
     if len(signal.times) < 2 or shot_duration <= 0:
         return []
 
+    # A sub-second hard-cut is not a valid ordinary action window. Keep the
+    # shot intact as the fallback; the caller can still label it, but we do
+    # not manufacture an even shorter fragment from sparse samples.
+    if exact_action and shot_duration < min(1.0, action_min_duration):
+        return [
+            Candidate(
+                start=shot_start,
+                end=shot_end,
+                action_score=0.2,
+                quality_score=0.5,
+                motion_start=shot_start,
+                motion_end=shot_end,
+            )
+        ]
+
     energy = _smooth(signal.energy, max(2, round(sample_fps * 0.35)))
     mean = float(energy.mean())
     std = float(energy.std())
     peak = float(energy.max())
     threshold = max(mean + 0.45 * std, peak * 0.22, 1e-6)
+    # Hysteresis keeps the quieter lead-in and finish of one gesture instead
+    # of returning only its highest-energy middle frames.
+    stop_threshold = max(mean + 0.12 * std, peak * 0.07, threshold * 0.32)
     mask = energy >= threshold
 
-    gap_samples = max(1, round(sample_fps * 0.30))
-    regions = _regions(mask)
+    # A gesture often pauses briefly while the hand changes direction. Keep
+    # those pauses in one candidate instead of returning its loudest stroke.
+    gap_samples = max(1, round(sample_fps * 0.65))
+    regions = _hysteresis_regions(energy, threshold, stop_threshold)
     merged: list[tuple[int, int]] = []
     for start, end in regions:
         if merged and start - merged[-1][1] <= gap_samples:
@@ -133,7 +173,11 @@ def find_candidates(
     target = min(max_duration, max(target_duration, min_duration))
     target = min(target, shot_duration)
     floor = min(min_duration, shot_duration)
-    exact_floor = min(0.2, shot_duration)
+    exact_floor = min(max(0.2, action_min_duration), shot_duration)
+    sample_period = (
+        float(np.median(np.diff(signal.times)))
+        if len(signal.times) > 1 else 1.0 / max(sample_fps, 1)
+    )
 
     # Quality: sharpness relative to the shot, penalize extremely dark frames.
     sharp = signal.sharpness
@@ -148,19 +192,22 @@ def find_candidates(
             continue
         region_end = min(region_end, len(signal.times))
         region_start_time = float(signal.times[region_start])
-        region_end_time = float(signal.times[region_end - 1])
+        region_end_time = min(
+            shot_end, float(signal.times[region_end - 1]) + sample_period
+        )
         region_span = max(0.0, region_end_time - region_start_time)
 
         # Finished edits can use the requested window, while ordinary footage
         # should retain the complete motion interval and avoid unrelated pads.
         if exact_action:
-            search_start = region_start_time
-            search_end = min(shot_end, region_end_time + 1.0 / max(sample_fps, 1))
+            search_start = max(shot_start, region_start_time - action_context)
+            search_end = min(shot_end, region_end_time + action_context)
             if search_end - search_start < exact_floor:
                 pad = (exact_floor - (search_end - search_start)) / 2.0
                 search_start = max(shot_start, search_start - pad)
                 search_end = min(shot_end, search_end + pad)
-                search_start = max(shot_start, search_end - exact_floor)
+                if search_end - search_start < exact_floor:
+                    search_start = max(shot_start, search_end - exact_floor)
         elif region_span < target:
             pad = (target - region_span) / 2.0
             search_start = max(shot_start, region_start_time - pad)
@@ -181,7 +228,13 @@ def find_candidates(
         requested_window = (
             search_end - search_start if exact_action else target
         )
-        window_samples = max(2, min(len(local), round(requested_window * sample_fps)))
+        # OpenCV's actual sampling interval can differ from the requested FPS
+        # because it seeks by source frames. Use timestamps for the window
+        # length, otherwise a nominal 1s floor can become a sub-second clip.
+        window_samples = max(
+            2,
+            min(len(local), round(requested_window / max(sample_period, 1e-6))),
+        )
         window_sum = np.convolve(local, np.ones(window_samples), mode="valid")
         if window_sum.size == 0:
             continue
@@ -208,11 +261,21 @@ def find_candidates(
         high_index = min(last, low_index + window_samples)
         start_time = float(signal.times[low_index])
         end_time = float(signal.times[high_index - 1])
-        end_time = min(end_time + (1.0 / max(sample_fps, 1)), shot_end)
+        end_time = min(end_time + sample_period, shot_end)
         if not exact_action:
             end_time = min(end_time, start_time + max_duration)
         start_time = max(start_time, shot_start)
-        if end_time - start_time < (exact_floor if exact_action else floor) * 0.9:
+        required_duration = exact_floor if exact_action else floor
+        if exact_action and end_time - start_time < required_duration:
+            # Timestamp sampling can leave the final window one sample short,
+            # especially when the gesture reaches the shot boundary. Pad the
+            # interval inside the same shot instead of returning a misleading
+            # sub-second clip.
+            deficit = required_duration - (end_time - start_time)
+            start_time = max(shot_start, start_time - deficit / 2.0)
+            end_time = min(shot_end, end_time + deficit)
+            start_time = max(shot_start, end_time - required_duration)
+        if end_time - start_time < required_duration * 0.99:
             continue
 
         lo, hi = low_index, high_index

@@ -123,8 +123,10 @@ function renderCategories() {
   }
   for (const [name, count] of entries) {
     const depth = name.split(" / ").length - 1;
+    const isParent = entries.some(([candidate]) =>
+      candidate.startsWith(`${name} / `));
     container.append(el("button", {
-      class: `category-pill depth-${Math.min(depth, 2)}${state.categories.has(name) ? " is-on" : ""}`,
+      class: `category-pill depth-${Math.min(depth, 2)}${isParent ? " is-parent" : ""}${state.categories.has(name) ? " is-on" : ""}`,
       title: name,
       "data-category": name,
       onclick: () => {
@@ -771,7 +773,6 @@ function bind() {
     if (event.target === dialog) dialog.close();
   });
   dialog.addEventListener("cancel", (event) => {
-    event.preventDefault();
     dialog.close();
   });
 

@@ -57,12 +57,18 @@ def test_exact_action_keeps_gesture_bounds_instead_of_padding_to_three_seconds()
     best = candidates[0]
     assert best.start <= 1.1
     assert best.end >= 1.8
-    assert best.end - best.start < 2.2
+    assert best.end - best.start >= 1.0
+    assert best.end - best.start < 2.8
 
 
 def test_category_aliases_keep_shared_taxonomy_spellings_explicit():
     assert tags.clean_category_path("中远") == "中远"
     assert tags.clean_category_path("痛点使用 / 痛点涂抹") == "疼点使用 / 疼点涂抹"
+    assert tags.clean_category_path("疼点呈现") == "疼点 / 疼点呈现"
+    assert tags.clean_category_path("疼点 / 疼点呈现") == "疼点 / 疼点呈现"
+    assert tags.resolve("疼点呈现", "分类") == ("分类", "疼点 / 疼点呈现")
+    assert tags.resolve("使用产品", "动作") is None
+    assert tags.resolve("贴敷", "动作") == ("动作", "贴敷")
 
 
 def test_sample_frames_keeps_absolute_timestamp_after_seek(tmp_path, monkeypatch):
@@ -282,6 +288,14 @@ def test_category_counts_follow_tree_order(tmp_path):
                     VALUES (?, ?, ?, 10, 1, 5, 'ready', ?, ?, ?)
                     """,
                     (source_id, f"D:/{source_id}.mp4", str(source_id) * 8, category, now, now),
+                )
+                tx.execute(
+                    """
+                    INSERT INTO clips(id, source_id, start, end, duration,
+                        status, origin, created_at, updated_at)
+                    VALUES (?, ?, 0, 1, 1, 'ready', 'auto', ?, ?)
+                    """,
+                    (f"clip_category_{source_id}", source_id, now, now),
                 )
     counts = library.category_counts()
     assert list(counts) == [

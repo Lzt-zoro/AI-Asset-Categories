@@ -155,7 +155,19 @@ def detect_shots(
     if not scenes:
         info = probe(path)
         return [(0.0, info.duration)]
-    return [(start.seconds, end.seconds) for start, end in scenes]
+    # Scene detectors can emit a tiny tail around a fade or codec boundary.
+    # Such a fragment is not a useful standalone shot and would make the
+    # action locator return a clip shorter than the configured floor.
+    minimum = max(0.0, float(min_scene_duration))
+    merged: list[tuple[float, float]] = []
+    for start, end in scenes:
+        current = (float(start.seconds), float(end.seconds))
+        if merged and (current[1] - current[0] < minimum
+                       or merged[-1][1] - merged[-1][0] < minimum):
+            merged[-1] = (merged[-1][0], current[1])
+        else:
+            merged.append(current)
+    return merged
 
 
 def extract_frame(

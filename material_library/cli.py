@@ -28,6 +28,10 @@ def main(argv: list[str] | None = None) -> int:
     analyze = sub.add_parser("analyze", help="分析待处理素材")
     analyze.add_argument("--limit", type=int, default=None)
     analyze.add_argument("--source-id", type=int, action="append", default=[])
+    analyze.add_argument(
+        "--reanalyze", action="store_true",
+        help="显式重新切片；保留 reviewed/manual 片段",
+    )
 
     query = sub.add_parser("search", help="检索片段")
     query.add_argument("keyword", nargs="?", default="")
@@ -66,8 +70,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "analyze":
         if args.source_id:
             for source_id in args.source_id:
-                created = library.analyze_source(source_id)
+                created = library.analyze_source(source_id, reanalyze=args.reanalyze)
                 print(f"source {source_id}: {created} clips")
+        elif args.reanalyze:
+            ids = library.source_ids_for_reanalyze()
+            if args.limit:
+                ids = ids[:args.limit]
+            stats = {"analyzed": 0, "failed": 0}
+            for index, source_id in enumerate(ids, start=1):
+                _progress("reanalyze", index, len(ids), str(source_id))
+                try:
+                    library.analyze_source(source_id, reanalyze=True)
+                    stats["analyzed"] += 1
+                except Exception as error:
+                    stats["failed"] += 1
+                    library._mark_source_failed(source_id, str(error))
+                    print(f"[reanalyze] failed source {source_id}: {error}")
+            print(json.dumps(stats, ensure_ascii=False, indent=2))
         else:
             stats = library.analyze_pending(limit=args.limit, progress=_progress)
             print(json.dumps(stats, ensure_ascii=False, indent=2))

@@ -292,6 +292,7 @@ button { cursor: pointer; }
 
 .category-pill.depth-1 { margin-left: 10px; border-left-color: var(--muted); }
 .category-pill.depth-2 { margin-left: 20px; border-left-color: #c9bea9; }
+.category-pill.is-parent .category-name { font-weight: 700; }
 
 .category-pill:hover { background: #fffdf8; border-color: var(--line); border-left-color: var(--ink); }
 

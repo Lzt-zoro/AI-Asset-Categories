@@ -8,7 +8,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 
-SCHEMA_VERSION = 3
+from . import tags
+
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sources (
@@ -147,6 +149,13 @@ class Database:
     def _pain_to_ache(value: str) -> str:
         return str(value).replace("痛点", "疼点").replace("痛", "疼")
 
+    @staticmethod
+    def _normalize_category_label(value: str) -> str:
+        value = Database._pain_to_ache(value)
+        if value == "疼点呈现":
+            return "疼点 / 疼点呈现"
+        return value
+
     def _migrate_legacy_labels(self, conn: sqlite3.Connection) -> None:
         """Move the former 剧情用途 dimension into the unified 分类 dimension."""
         old_rows = conn.execute(
@@ -155,8 +164,8 @@ class Database:
         ).fetchall()
         for row in old_rows:
             dimension = "分类" if row["dimension"] == "剧情用途" else row["dimension"]
-            canonical = self._pain_to_ache(row["canonical"])
-            name = self._pain_to_ache(row["name"])
+            canonical = self._normalize_category_label(row["canonical"])
+            name = self._normalize_category_label(row["name"])
             target = conn.execute(
                 "SELECT id FROM tags WHERE dimension=? AND canonical=?",
                 (dimension, canonical),
@@ -185,13 +194,25 @@ class Database:
                     "UPDATE tags SET name=?, canonical=? WHERE id=?",
                     (name, canonical, target_id),
                 )
-        conn.execute(
-            "UPDATE sources SET category=REPLACE(category, '痛', '疼') "
-            "WHERE category LIKE '%痛%'"
-        )
+        category_rows = conn.execute(
+            "SELECT id, category FROM sources WHERE category<>''"
+        ).fetchall()
+        for row in category_rows:
+            conn.execute(
+                "UPDATE sources SET category=? WHERE id=?",
+                (tags.clean_category_path(str(row["category"])), int(row["id"])),
+            )
         conn.execute(
             "UPDATE clips SET transcript='' WHERE transcript IS NULL"
         )
+        # The old broad label is no longer an AI action/category. Remove only
+        # automatic guesses; manual and folder labels remain untouched.
+        for dimension, canonical in (("动作", "使用产品"), ("分类", "使用产品")):
+            conn.execute(
+                "DELETE FROM clip_tags WHERE origin='auto' AND tag_id IN "
+                "(SELECT id FROM tags WHERE dimension=? AND canonical=?)",
+                (dimension, canonical),
+            )
     def connect(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)
         if conn is None:

@@ -26,6 +26,9 @@ class ScanRequest(BaseModel):
 class AnalyzeRequest(BaseModel):
     limit: int | None = None
     source_ids: list[int] | None = None
+    # Explicit opt-in: recut existing sources while preserving reviewed/manual
+    # clips. Normal analysis remains incremental and never rewrites old clips.
+    reanalyze: bool = False
 
 
 class TagUpdate(BaseModel):
@@ -175,7 +178,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if job_state.snapshot()["status"] == "running":
             raise HTTPException(409, "已有任务在运行")
         if body.source_ids is not None:
-            ids = library.source_ids_for_analyze(body.source_ids)
+            ids = (
+                library.source_ids_for_reanalyze(body.source_ids)
+                if body.reanalyze
+                else library.source_ids_for_analyze(body.source_ids)
+            )
             if not ids:
                 # Nothing new was found by the preceding scan. Treat it as a
                 # successful no-op so the UI does not show a scary error.
@@ -186,7 +193,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 for index, source_id in enumerate(ids, start=1):
                     job_state.update("analyze", index, len(ids), str(source_id))
                     try:
-                        library.analyze_source(source_id)
+                        library.analyze_source(source_id, reanalyze=body.reanalyze)
                         ok += 1
                     except Exception:
                         failed += 1
@@ -196,9 +203,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else:
             run_job(
                 "analyze",
-                lambda: library.analyze_pending(limit=body.limit, progress=job_state.update),
+                lambda: (
+                    _reanalyze_all(library, body.limit, job_state)
+                    if body.reanalyze
+                    else library.analyze_pending(limit=body.limit, progress=job_state.update)
+                ),
             )
         return {"started": True}
+
+    def _reanalyze_all(library: Library, limit: int | None, job_state: Job) -> dict[str, int]:
+        ids = library.source_ids_for_reanalyze()[:limit] if limit else library.source_ids_for_reanalyze()
+        stats = {"analyzed": 0, "failed": 0}
+        for index, source_id in enumerate(ids, start=1):
+            job_state.update("reanalyze", index, len(ids), str(source_id))
+            try:
+                library.analyze_source(source_id, reanalyze=True)
+                stats["analyzed"] += 1
+            except Exception as error:
+                stats["failed"] += 1
+                library._mark_source_failed(source_id, str(error))
+        return stats
 
     @api.get("/job")
     def job() -> dict[str, Any]:
@@ -214,7 +238,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         vocab["分类"] = sorted(
             set(vocab.get("分类", []))
             | set(library.categories())
-            | set(settings.category_labels)
         )
         return {
             "dimensions": list(tags.DIMENSIONS),

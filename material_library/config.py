@@ -46,8 +46,10 @@ class SegmentConfig:
     target_duration: float = 3.0
     min_duration: float = 1.0
     max_duration: float = 8.0
-    sample_fps: int = 8
+    sample_fps: int = 12
     analyze_width: int = 160
+    action_min_duration: float = 1.0
+    action_context: float = 0.2
 
 
 @dataclass(frozen=True)
@@ -163,8 +165,10 @@ def load_settings(path: Path | None = None) -> Settings:
             target_duration=float(seg.get("target_duration", 3.0)),
             min_duration=float(seg.get("min_duration", 1.0)),
             max_duration=float(seg.get("max_duration", 8.0)),
-            sample_fps=max(2, int(seg.get("sample_fps", 8))),
+            sample_fps=max(4, int(seg.get("sample_fps", 12))),
             analyze_width=max(80, int(seg.get("analyze_width", 160))),
+            action_min_duration=max(0.2, float(seg.get("action_min_duration", 1.0))),
+            action_context=max(0.0, float(seg.get("action_context", 0.2))),
         ),
         shots=ShotConfig(
             detector=str(shots.get("detector", "adaptive")),

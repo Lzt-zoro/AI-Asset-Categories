@@ -120,6 +120,9 @@
 - `{"limit": 50}` — 分析最早的 50 个待处理源文件。
 - `{"source_ids": []}` — 表示「没有新素材」，返回 `200 {"started": false, "reason": ...}`，
   而不是错误。
+- `{"source_ids": [12], "reanalyze": true}` — 显式重新切片并重新标注指定源文件；会删除该源文件下
+  未锁定的自动片段，但保留 `reviewed=1` 或 `origin='manual'` 的片段。`reanalyze` 默认 `false`，
+  普通增量分析不会改写旧片段。
 
 `GET /api/job` → `{kind,status,current,total,message,error,result}`
 
@@ -188,7 +191,7 @@ plan = [find_clip([beat], seconds, category) for beat, category, seconds in beat
 
 - 一个进程写库（`BEGIN IMMEDIATE` + WAL）；外部工具请只读查询，不要并发写同一个
   `library.db`。需要写入时走 HTTP。
-- `PRAGMA user_version` 记录 schema 版本（当前 3）。启动时自动做加法迁移
+- `PRAGMA user_version` 记录 schema 版本（当前 4）。启动时自动做加法迁移
   （`ALTER TABLE ADD COLUMN`）；如果库版本高于程序支持版本，会拒绝启动而不是悄悄
   写坏数据。
 - 片段 ID = `clip_<sha256(源文件哈希, 起止毫秒)[:20]>`，同一个源文件的同一区间永远

@@ -13,8 +13,10 @@
     "target_duration": 3.0,
     "min_duration": 1.0,
     "max_duration": 8.0,
-    "sample_fps": 8,
-    "analyze_width": 160
+    "sample_fps": 12,
+    "analyze_width": 160,
+    "action_min_duration": 1.0,
+    "action_context": 0.2
   },
   "shots": {
     "detector": "adaptive",
@@ -27,7 +29,6 @@
     "疼点涂抹",
     "洗脸疼点",
     "洗脸后展示",
-    "使用产品",
     "美好展示",
     "好坏皮肤对比",
     "漂亮女儿",
@@ -40,7 +41,7 @@
     "中远景",
     "中远",
     "开场钩子",
-    "疼点呈现",
+    "疼点 / 疼点呈现",
     "产品引入",
     "使用演示",
     "效果对比",

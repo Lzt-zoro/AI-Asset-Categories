@@ -234,6 +234,7 @@ class Library:
         *,
         recursive: bool = True,
         material_type: str = "普通素材",
+        reanalyze: bool = False,
         progress: Progress | None = None,
     ) -> dict[str, Any]:
         root = Path(root).resolve()
@@ -267,7 +268,7 @@ class Library:
             stats[result] += 1
             # Only new/changed files need analysis; the caller passes these ids
             # back so "扫描并分析" never re-analyzes the whole library.
-            if source_id and result in {"added", "updated"}:
+            if source_id and (result in {"added", "updated"} or reanalyze):
                 stats["source_ids"].append(source_id)
         return stats
 
@@ -398,6 +399,27 @@ class Library:
         allowed = {int(row["id"]) for row in rows}
         return [item for item in wanted if item in allowed]
 
+    def source_ids_for_reanalyze(self, source_ids: list[int] | None = None) -> list[int]:
+        """Return non-duplicate sources for an explicit re-analysis pass."""
+        conn = self.db.connect()
+        if source_ids is None:
+            rows = conn.execute(
+                "SELECT id FROM sources WHERE duplicate_of IS NULL "
+                "AND status<>'analyzing' ORDER BY id"
+            ).fetchall()
+            return [int(row["id"]) for row in rows]
+        wanted = list(dict.fromkeys(int(item) for item in source_ids))
+        if not wanted:
+            return []
+        marks = ",".join("?" for _ in wanted)
+        rows = conn.execute(
+            f"SELECT id FROM sources WHERE id IN ({marks}) "
+            "AND duplicate_of IS NULL AND status<>'analyzing' ORDER BY id",
+            wanted,
+        ).fetchall()
+        allowed = {int(row["id"]) for row in rows}
+        return [item for item in wanted if item in allowed]
+
     # --------------------------------------------------------------- analyze
     def analyze_pending(
         self,
@@ -418,7 +440,13 @@ class Library:
                 self._mark_source_failed(int(source["id"]), str(error))
         return stats
 
-    def analyze_source(self, source_id: int, *, relabel: bool = False) -> int:
+    def analyze_source(
+        self,
+        source_id: int,
+        *,
+        relabel: bool = False,
+        reanalyze: bool = False,
+    ) -> int:
         conn = self.db.connect()
         source = conn.execute("SELECT * FROM sources WHERE id=?", (source_id,)).fetchone()
         if source is None:
@@ -441,6 +469,16 @@ class Library:
             threshold=self.settings.shots.threshold,
             min_scene_duration=self.settings.shots.min_scene_duration,
         )
+        if reanalyze:
+            # Re-cut only after probing and shot detection succeed. Human-
+            # locked clips and manual time ranges are durable records and
+            # must survive tuning, while a failed re-analysis keeps old data.
+            with self.db.transaction() as tx:
+                tx.execute(
+                    "DELETE FROM clips WHERE source_id=? AND reviewed=0 "
+                    "AND origin<>'manual'",
+                    (source_id,),
+                )
         with self.db.transaction() as tx:
             tx.execute("DELETE FROM shots WHERE source_id=?", (source_id,))
             for index, (start, end) in enumerate(shots):
@@ -495,6 +533,8 @@ class Library:
                 max_duration=seg.max_duration,
                 sample_fps=seg.sample_fps,
                 exact_action=True,
+                action_min_duration=seg.action_min_duration,
+                action_context=seg.action_context,
             )
         if not candidates:
             window = min(
@@ -768,6 +808,9 @@ class Library:
             SELECT t.dimension, t.canonical, COUNT(DISTINCT ct.clip_id) AS count
             FROM tags t
             LEFT JOIN clip_tags ct ON ct.tag_id=t.id
+            LEFT JOIN clips c ON c.id=ct.clip_id
+            LEFT JOIN sources s ON s.id=c.source_id
+            WHERE s.duplicate_of IS NULL OR ct.clip_id IS NULL
             GROUP BY t.dimension, t.canonical
             HAVING count > 0
             ORDER BY t.dimension, count DESC
@@ -785,7 +828,9 @@ class Library:
             """
             SELECT DISTINCT t.canonical AS category
             FROM tags t JOIN clip_tags ct ON ct.tag_id=t.id
-            WHERE t.dimension='分类'
+            JOIN clips c ON c.id=ct.clip_id
+            JOIN sources s ON s.id=c.source_id
+            WHERE t.dimension='分类' AND s.duplicate_of IS NULL
             ORDER BY category
             """
         ).fetchall()
@@ -799,47 +844,51 @@ class Library:
                 """
             ).fetchall()
         )
+        values.update(
+            tags.clean_category_path(str(label))
+            for label in self.settings.category_labels
+            if label
+        )
         return sorted(values)
 
     def category_counts(self) -> dict[str, int]:
-        """Source counts per folder category, ordered as a tree.
+        """Count matching clips per unified category, ordered as a tree.
 
-        Parent folders also count their descendants, so selecting
-        ``痛点使用`` returns everything below it. Ordering keeps each parent
-        immediately above its children, which the sidebar relies on to indent.
+        The UI displays clips, not source files, so folder categories must be
+        counted from analyzed clips. A clip can also have an AI category; the
+        set-based accumulator avoids double-counting when both labels match.
         """
         conn = self.db.connect()
-        rows = conn.execute(
-            """
-            SELECT category, COUNT(*) AS n FROM sources
-            WHERE category<>'' AND duplicate_of IS NULL GROUP BY category
-            """
-        ).fetchall()
-        counts: dict[str, int] = {}
-        for row in rows:
-            parts = str(row["category"]).split(" / ")
-            for depth in range(1, len(parts) + 1):
-                key = " / ".join(parts[:depth])
-                counts[key] = counts.get(key, 0) + int(row["n"])
-        # AI/manual categories are clip-level labels. Include them in the
-        # same tree so the UI exposes one unified 分类 facet.
-        label_rows = conn.execute(
-            """
-            SELECT t.canonical AS category, COUNT(DISTINCT ct.clip_id) AS n
-            FROM tags t JOIN clip_tags ct ON ct.tag_id=t.id
-            WHERE t.dimension='分类' AND ct.origin<>'folder'
-            GROUP BY t.canonical
-            """
-        ).fetchall()
-        for row in label_rows:
-            category = str(row["category"])
-            if category in counts:
-                counts[category] = max(counts[category], int(row["n"]))
-                continue
+        counts: dict[str, set[str]] = {}
+
+        def add(category: str, clip_id: str) -> None:
             parts = category.split(" / ")
             for depth in range(1, len(parts) + 1):
                 key = " / ".join(parts[:depth])
-                counts[key] = max(counts.get(key, 0), int(row["n"]))
+                counts.setdefault(key, set()).add(clip_id)
+
+        folder_rows = conn.execute(
+            """
+            SELECT s.category, c.id AS clip_id
+            FROM sources s JOIN clips c ON c.source_id=s.id
+            WHERE s.category<>'' AND s.duplicate_of IS NULL
+            """
+        ).fetchall()
+        for row in folder_rows:
+            add(str(row["category"]), str(row["clip_id"]))
+
+        label_rows = conn.execute(
+            """
+            SELECT t.canonical AS category, ct.clip_id
+            FROM tags t JOIN clip_tags ct ON ct.tag_id=t.id
+            JOIN clips c ON c.id=ct.clip_id
+            JOIN sources s ON s.id=c.source_id
+            WHERE t.dimension='分类' AND ct.origin<>'folder'
+                AND s.duplicate_of IS NULL
+            """
+        ).fetchall()
+        for row in label_rows:
+            add(str(row["category"]), str(row["clip_id"]))
         children: dict[str, list[str]] = {}
         for name in counts:
             parent = name.rsplit(" / ", 1)[0] if " / " in name else ""
@@ -849,13 +898,14 @@ class Library:
 
         def walk(parent: str) -> None:
             for name in sorted(
-                children.get(parent, []), key=lambda item: (-counts[item], item)
+                children.get(parent, []),
+                key=lambda item: (-len(counts[item]), item),
             ):
                 ordered.append(name)
                 walk(name)
 
         walk("")
-        return {name: counts[name] for name in ordered}
+        return {name: len(counts[name]) for name in ordered}
 
     def list_sources(self, limit: int = 200) -> list[dict[str, Any]]:
         rows = self.db.connect().execute(
@@ -915,6 +965,9 @@ class Library:
         if query.material_type:
             clauses.append("s.material_type=?")
             params.append(query.material_type)
+        # Duplicate source rows are kept for auditability but must not appear
+        # in facets or search results as if they were independent assets.
+        clauses.append("s.duplicate_of IS NULL")
         if query.categories:
             # Category is hierarchical ("痛点使用 / 痛点涂抹"), so matching a
             # parent must also return its children.
@@ -957,9 +1010,21 @@ class Library:
             # Require every extracted concept. This makes a compound search
             # such as "涂抹祛痘霜" mean action AND product, while ordinary free
             # text remains substring-based.
-            keyword_clause = " AND ".join("c.search_text LIKE ?" for _ in keyword_tokens)
+            keyword_clause = " AND ".join(
+                "(c.search_text LIKE ? OR c.search_text LIKE ?)"
+                for _ in keyword_tokens
+            )
             clauses.append(f"({keyword_clause})")
-            params.extend(f"%{token}%" for token in keyword_tokens)
+            # Search both canonical text and the compact alias concept. This
+            # keeps compound Chinese queries deterministic without requiring a
+            # vector database in the MVP.
+            for token in keyword_tokens:
+                aliases = [token]
+                for dimension, entries in tags.VOCABULARY.items():
+                    for canonical, values in entries.items():
+                        if canonical == token:
+                            aliases.extend(values)
+                params.extend((f"%{token}%", f"%{aliases[-1]}%"))
 
         sql = self._clip_select() + " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY c.updated_at DESC LIMIT 20000"

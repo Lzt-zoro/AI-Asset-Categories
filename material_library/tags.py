@@ -49,7 +49,8 @@ DEFAULT_CATEGORY_ALIASES: dict[str, str] = {
     "痛点": "疼点",
     "痛点使用": "疼点使用",
     "痛点涂抹": "疼点涂抹",
-    "痛点呈现": "疼点呈现",
+    "痛点呈现": "疼点 / 疼点呈现",
+    "疼点呈现": "疼点 / 疼点呈现",
 }
 
 # canonical -> aliases. Aliases only need to be listed once and are matched
@@ -87,6 +88,7 @@ VOCABULARY: dict[str, dict[str, list[str]]] = {
     },
     "动作": {
         "涂抹": ["涂产品", "擦产品", "上脸", "抹开", "涂开", "擦拭", "apply", "涂抹动作"],
+        "贴敷": ["贴面膜", "敷上", "敷贴", "贴片", "贴敷棉片", "贴敷动作", "apply patch"],
         "展示产品": ["举产品", "拿产品", "产品展示", "show product"],
         "打开包装": ["拆包装", "开箱", "拆盒", "unbox"],
         "挤压": ["按压", "挤膏体", "挤出来", "squeeze"],
@@ -98,7 +100,6 @@ VOCABULARY: dict[str, dict[str, list[str]]] = {
         "说话": ["口播", "讲解", "对镜头说话", "talking"],
         "微笑": ["笑", "笑容", "smile"],
         "照镜子": ["对镜", "镜前", "mirror"],
-        "使用产品": ["用产品", "体验产品", "使用中", "using product"],
         "整理衣物": ["拉衣角", "整理衣服", "adjust clothing"],
         "指向": ["手指", "指向产品", "point"],
     },
@@ -113,9 +114,12 @@ VOCABULARY: dict[str, dict[str, list[str]]] = {
         "疼点使用": ["痛点使用", "疼点场景使用", "边疼点边用"],
         "疼点涂抹": ["痛点涂抹", "边疼点边涂"],
         "开场钩子": ["开头", "前3秒", "吸引注意", "hook", "opening"],
-        "疼点呈现": ["问题展示", "痘痘特写", "problem", "痛点呈现"],
+        "疼点 / 疼点呈现": ["问题展示", "痘痘特写", "problem", "痛点呈现", "疼点呈现"],
         "产品引入": ["产品出场", "介绍产品", "product intro"],
         "使用演示": ["演示", "用法展示", "demo", "usage"],
+        "使用演示 / 涂抹": ["使用涂抹", "涂抹演示", "使用产品涂抹"],
+        "使用演示 / 贴敷": ["贴敷演示", "敷贴演示", "使用产品贴敷"],
+        "使用演示 / 挤压": ["挤压演示", "取用产品", "使用产品挤压"],
         "效果对比": ["效果", "对比", "result", "before after result"],
         "信任背书": ["资质", "检测报告", "口碑", "trust"],
         "行动号召": ["结尾引导", "cta", "引导下单", "购买引导"],
@@ -214,15 +218,29 @@ def clean_category_path(
     # User aliases are allowed to override the default spelling for one-off
     # migrations; an empty config uses the approved 痛 -> 疼 normalization.
     parts: list[str] = []
-    for raw in re.split(r"\s*/\s*", str(value)):
+
+    def append_part(raw: str, seen: set[str]) -> None:
         part = clean_category(raw)
-        part = merged_aliases.get(part, part)
-        # The project-wide canonical spelling is always 疼, even if an old
-        # local alias file still contains the previous 痛 spelling.
-        part = DEFAULT_CATEGORY_ALIASES.get(part, part)
-        part = part.replace("痛", "疼")
-        if part and (not parts or parts[-1] != part):
-            parts.append(part)
+        if not part:
+            return
+        # An alias may itself be a path (for example 痛点呈现 -> 疼点 /
+        # 疼点呈现). Expand aliases recursively so an already expanded value
+        # does not grow a duplicate parent. The cycle guard also makes a bad
+        # local alias file harmless.
+        mapped = merged_aliases.get(part)
+        if mapped and mapped != part and part not in seen:
+            next_seen = seen | {part}
+            for child in re.split(r"\s*/\s*", mapped):
+                append_part(child, next_seen)
+            return
+        # At the cycle guard boundary keep the spelling as a leaf. Applying
+        # the path-valued alias a second time would append the parent twice.
+        normalized = part.replace("痛", "疼")
+        if normalized and normalized not in parts:
+            parts.append(normalized)
+
+    for raw in re.split(r"\s*/\s*", str(value)):
+        append_part(raw, set())
     return " / ".join(parts)
 
 
