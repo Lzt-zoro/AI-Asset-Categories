@@ -1,0 +1,64 @@
+{
+  "library_root": "data",
+  "ai": {
+    "enabled": false,
+    "base_url": "https://api.openai.com/v1",
+    "model": "",
+    "api_key": "",
+    "timeout": 120,
+    "max_frames": 4,
+    "concurrency": 2
+  },
+  "segment": {
+    "target_duration": 3.0,
+    "min_duration": 1.0,
+    "max_duration": 8.0,
+    "sample_fps": 8,
+    "analyze_width": 160
+  },
+  "shots": {
+    "detector": "adaptive",
+    "threshold": 3.0,
+    "min_scene_duration": 0.4
+  },
+  "category_labels": [
+    "疼点",
+    "疼点使用",
+    "疼点涂抹",
+    "洗脸疼点",
+    "洗脸后展示",
+    "使用产品",
+    "美好展示",
+    "好坏皮肤对比",
+    "漂亮女儿",
+    "妈妈小孩",
+    "筛选",
+    "额头疙瘩",
+    "额头",
+    "医护床",
+    "医护床处理",
+    "中远景",
+    "中远",
+    "开场钩子",
+    "疼点呈现",
+    "产品引入",
+    "使用演示",
+    "效果对比",
+    "信任背书",
+    "行动号召",
+    "转场",
+    "氛围铺垫"
+  ],
+  "search": {
+    "weight_tag": 0.40,
+    "weight_text": 0.25,
+    "weight_action": 0.15,
+    "weight_duration": 0.12,
+    "weight_quality": 0.08,
+    "default_limit": 40
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 5288
+  }
+}

@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>素材库 · 镜头切片</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="masthead">
+    <div class="brand">
+      <span class="brand-mark">◒</span>
+      <div>
+        <h1>素材库</h1>
+        <p class="brand-sub">AI clip index · local only</p>
+      </div>
+    </div>
+    <div class="masthead-metrics" id="metrics">
+      <div class="metric"><span class="metric-value">—</span><span class="metric-label">片段</span></div>
+      <div class="metric"><span class="metric-value">—</span><span class="metric-label">素材</span></div>
+      <div class="metric"><span class="metric-value">—</span><span class="metric-label">秒</span></div>
+    </div>
+    <div class="masthead-actions">
+      <span class="job-chip" id="job-chip" hidden></span>
+      <button class="ghost" id="open-ingest">入库 / 分析</button>
+      <span class="ai-chip" id="ai-chip">AI 未配置</span>
+    </div>
+  </header>
+
+  <section class="searchbar">
+    <label class="search-field">
+      <span class="search-glyph">⌕</span>
+      <input id="query" type="search" placeholder="描述你想要的镜头，例如：女生在浴室涂抹祛痘霜" autocomplete="off">
+    </label>
+    <label class="duration-filter">
+      <span>时长</span>
+      <input id="min-duration" type="number" step="0.5" min="0" placeholder="最短">
+      <span class="dash">–</span>
+      <input id="max-duration" type="number" step="0.5" min="0" placeholder="最长">
+    </label>
+    <button class="primary" id="search-button">检索</button>
+  </section>
+
+  <main class="workspace">
+    <aside class="filters" id="filters">
+      <div class="filter-block filter-block-categories">
+        <div class="filter-head">
+          <h2>分类 <span class="filter-hint">目录 + 画面用途</span></h2>
+          <button class="link" id="clear-categories">清空</button>
+        </div>
+        <div id="category-groups" class="category-groups"></div>
+      </div>
+      <div class="filter-block filter-block-tags">
+        <div class="filter-head secondary">
+          <h2>标签维度</h2>
+          <button class="link" id="clear-filters">清空</button>
+        </div>
+        <div id="filter-groups" class="filter-groups"></div>
+      </div>
+    </aside>
+
+    <section class="results">
+      <div class="results-head">
+        <div>
+          <h2 id="result-title">全部片段</h2>
+          <p id="result-meta" class="meta">正在读取索引…</p>
+        </div>
+        <div class="view-toggle">
+          <button class="ghost is-active" data-mode="grid">印样</button>
+          <button class="ghost" data-mode="list">清单</button>
+        </div>
+      </div>
+      <div id="active-filters" class="active-filters" hidden></div>
+      <div id="grid" class="grid"></div>
+      <div id="empty" class="empty" hidden>
+        <p class="empty-title">还没有可用的片段</p>
+        <p>先点击「入库 / 分析」，扫描一个素材文件夹。</p>
+      </div>
+    </section>
+
+    <aside class="inspector" id="inspector">
+      <div class="inspector-placeholder" id="inspector-placeholder">
+        <p class="plate">01</p>
+        <h2>选择一个片段</h2>
+        <p class="muted">在左侧点选，查看时间区间、标签与完整描述，并可直接改写。</p>
+      </div>
+      <div class="inspector-body" id="inspector-body" hidden></div>
+    </aside>
+  </main>
+
+  <dialog id="ingest-dialog">
+    <div class="dialog-card" id="ingest-form">
+      <header>
+        <h2>入库与分析</h2>
+        <button type="button" class="icon" id="close-ingest" aria-label="关闭">×</button>
+      </header>
+      <label class="field">
+        <span>素材文件夹</span>
+        <input id="ingest-path" type="text" list="recent-paths" placeholder="D:\materials\口红 或 \\NAS\共享\素材" spellcheck="false" autocomplete="off">
+        <datalist id="recent-paths"></datalist>
+      </label>
+      <label class="checkline">
+        <input id="ingest-recursive" type="checkbox" checked>
+        <span>包含子文件夹</span>
+      </label>
+      <label class="field compact-field">
+        <span>素材类型</span>
+        <select id="ingest-material-type">
+          <option value="普通素材">普通素材 · 找完整动作区间</option>
+          <option value="成片">成片 · 按硬切镜头保留节奏</option>
+        </select>
+      </label>
+      <div class="dialog-actions">
+        <button type="button" class="ghost" id="run-scan">仅扫描</button>
+        <button type="button" class="primary" id="run-scan-analyze">扫描并分析</button>
+      </div>
+      <div class="jobline" id="jobline">
+        <div class="jobbar"><span id="jobbar-fill"></span></div>
+        <p id="job-text" class="muted">空闲</p>
+      </div>
+      <div class="dialog-note">
+        <p><strong>只读源文件。</strong>入库只记录路径；分析结果、缩略图与预览缓存写入本项目的 <code>data/</code>。</p>
+        <p>子文件夹名会自动成为「分类」标签；模型也会在同一分类维度补充画面用途。</p>
+        <p>任务在后台运行，关闭此窗口不会中断；可随时重新打开查看进度。</p>
+      </div>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" hidden></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
